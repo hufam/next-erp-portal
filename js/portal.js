@@ -54,11 +54,12 @@ function showLogin(message = '') {
   userLabel.textContent = ''
   document.querySelector('#company-select').hidden = true
   document.title = 'NEXT ERP'
+  document.querySelector('#portal-company-name').textContent = 'NEXT ERP'
   authPanel.hidden = false
   authPanel.innerHTML = `
     <div class="login-card">
       <div class="login-brand">NEXT ERP</div>
-      <h2>WEB ERP 로그인</h2>
+      <h2>ERP 로그인</h2>
       <p>등록된 사용자 계정으로 로그인하십시오.</p>
       <form id="login-form">
         <label for="login-id">${emailFallbackEnabled() ? '이메일' : '사번'}</label>
@@ -174,6 +175,7 @@ async function loadPortal() {
     root.replaceChildren()
     userLabel.textContent = '사원정보 확인 중'
     document.title = company.company_name
+    document.querySelector('#portal-company-name').textContent = company.company_name
     // 인증 사용자와 선택 회사에 연결된 사원만 표시합니다.
     const profileTask = client.from('md_employee')
       .select('emp_no,emp_name').eq('company_id', company.company_id)
