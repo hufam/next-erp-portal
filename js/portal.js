@@ -46,13 +46,14 @@ function emailFallbackEnabled() {
 
 function showLogin(message = '') {
   authenticated = false
+  selectedCompany = null
   root.replaceChildren()
   document.querySelector('#portal-content').hidden = true
   logoutButton.hidden = true
   passwordChangeButton.hidden = true
   userLabel.textContent = ''
   document.querySelector('#company-select').hidden = true
-  document.title = 'NEXT ERP | WEB ERP'
+  document.title = 'NEXT ERP'
   authPanel.hidden = false
   authPanel.innerHTML = `
     <div class="login-card">
@@ -171,8 +172,21 @@ async function loadPortal() {
     const company = companies.find(c => String(c.company_id) === picker.value)
     selectedCompany = company
     root.replaceChildren()
-    userLabel.textContent = company.company_name
-    document.title = `${company.company_name} | WEB ERP`
+    userLabel.textContent = '사원정보 확인 중'
+    document.title = company.company_name
+    // 인증 사용자와 선택 회사에 연결된 사원만 표시합니다.
+    const profileTask = client.from('md_employee')
+      .select('emp_no,emp_name').eq('company_id', company.company_id)
+      .eq('auth_user_id', user.id).eq('active_yn', 'Y').maybeSingle()
+    void Promise.resolve(profileTask).then(({data: employee, error: profileError}) => {
+      if (selectedCompany !== company || !authenticated) return
+      userLabel.textContent = !profileError && employee?.emp_no && employee?.emp_name
+        ? `${employee.emp_no}-${employee.emp_name}` : '사원정보 미연결'
+      if (profileError) console.error('Portal employee lookup:', profileError)
+    }).catch(error => {
+      if (selectedCompany === company && authenticated) userLabel.textContent = '사원정보 조회 실패'
+      console.error('Portal employee lookup:', error)
+    })
     const { data, error } = await client.rpc('rpc_next_company_module_list', {p_company_id: company.company_id})
     if (selectedCompany !== company || !authenticated) return
     if (error) { setStatus('회사별 메뉴 조회 실패', true); return }
