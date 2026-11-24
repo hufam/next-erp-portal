@@ -1,0 +1,120 @@
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './supabase-config.js'
+
+const client = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+})
+const panel = document.querySelector('#password-panel')
+const params = new URLSearchParams(location.search)
+// 재설정 메일에서 직접 열린 탭만 복구 이벤트를 처리합니다.
+// 다른 탭의 비밀번호관리 화면이 복구 입력 화면으로 바뀌는 현상을 방지합니다.
+const recoveryLinkAtLoad = params.has('code') || params.get('type') === 'recovery' ||
+  (location.hash.includes('type=recovery') && location.hash.includes('access_token='))
+let recovery = false
+let completed = false
+
+function clearRecoveryUrl() {
+  // 인증 링크의 토큰 및 복구 파라미터를 주소/방문기록에서 제거합니다.
+  history.replaceState(null, '', new URL('./password.html', location.href).pathname)
+}
+function message(text, error = false) {
+  const el = document.querySelector('#password-message')
+  if (!el) return
+  el.textContent = text
+  el.classList.toggle('error', error)
+}
+function frame(title, body) {
+  panel.innerHTML = `<div class="login-brand">NEXT ERP</div><h2>${title}</h2>${body}<div class="message" id="password-message" role="status"></div>`
+}
+function resetRequest() {
+  frame('비밀번호 등록 · 재등록', `<p>등록된 이메일로 비밀번호 재설정 링크를 보내드립니다. 메일의 링크로 본인확인 후 새 비밀번호를 설정하십시오.</p><form id="reset-request"><label for="reset-email">등록된 이메일</label><input id="reset-email" type="email" autocomplete="email" required><div class="actions"><a href="./index.html">취소</a><button class="primary" id="reset-send" type="submit">인증 메일 발송</button></div></form>`)
+  document.querySelector('#reset-request').addEventListener('submit', async e => {
+    e.preventDefault()
+    const button = document.querySelector('#reset-send'); button.disabled = true
+    const email = document.querySelector('#reset-email').value.trim()
+    try {
+      const redirectTo = new URL('./password.html', location.href).href
+      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo })
+      if (error) throw error
+      // 메일 요청이 성공적으로 접수되면 중간 요청 화면을 남기지 않습니다.
+      // 브라우저가 스크립트에 의한 탭 종료를 허용하지 않으면 로그인 화면으로 대체합니다.
+      message('인증 메일 요청이 접수되었습니다. 로그인 화면으로 돌아갑니다.')
+      window.close()
+      setTimeout(() => {
+        if (!window.closed) window.location.replace(new URL('./index.html', location.href).href)
+      }, 350)
+    } catch (err) {
+      console.error('Password reset request:', err)
+      message('메일 발송 요청을 처리하지 못했습니다. 잠시 후 다시 시도하십시오.', true)
+    } finally { button.disabled = false }
+  })
+}
+// 변경과 분실 재설정의 완료 메시지 및 복귀 동작을 구분합니다.
+function showPasswordSuccess(mode) {
+  completed = true
+  recovery = false
+  clearRecoveryUrl()
+  const portalLink = document.querySelector('#password-portal-link')
+  if (portalLink) portalLink.hidden = true
+  if (mode === 'recovery') {
+    frame('비밀번호 재설정 완료', '<p>새 비밀번호가 정상적으로 등록되었습니다.</p><p class="password-close-notice">현재 비밀번호관리 창을 닫아 주세요.</p><p>기존 WEB ERP 포털에서 이메일과 새 비밀번호로 로그인하십시오.</p>')
+  } else {
+    frame('비밀번호 변경 완료', '<p>비밀번호가 정상적으로 변경되었습니다.</p><p class="password-close-notice">현재 비밀번호관리 창을 닫아 주세요.</p><p>기존 WEB ERP 포털에서 이메일과 새 비밀번호로 다시 로그인하십시오.</p>')
+  }
+}
+function setPassword(mode) {
+  frame(mode === 'recovery' ? '새 비밀번호 등록' : '비밀번호 변경', `<p>${mode === 'recovery' ? '이메일 인증이 완료되었습니다.' : '현재 비밀번호를 확인한 뒤 변경합니다.'}</p><form id="password-form">${mode === 'change' ? '<label for="current-password">현재 비밀번호</label><input id="current-password" type="password" autocomplete="current-password" required>' : ''}<label for="new-password">신규 비밀번호</label><input id="new-password" type="password" autocomplete="new-password" minlength="8" required><label for="confirm-password">비밀번호 확인</label><input id="confirm-password" type="password" autocomplete="new-password" minlength="8" required><div class="actions"><a href="./index.html">취소</a><button class="primary" id="password-save" type="submit">${mode === 'recovery' ? '등록저장' : '변경저장'}</button></div></form>`)
+  document.querySelector('#password-form').addEventListener('submit', async e => {
+    e.preventDefault()
+    const button = document.querySelector('#password-save')
+    const password = document.querySelector('#new-password').value
+    const confirm = document.querySelector('#confirm-password').value
+    if (password.length < 8 || /\s/.test(password)) { message('비밀번호는 8자 이상이며 공백을 포함할 수 없습니다.', true); return }
+    if (password !== confirm) { message('새 비밀번호와 확인값이 일치하지 않습니다.', true); return }
+    if (!window.confirm('비밀번호를 실제로 저장하시겠습니까?')) return
+    button.disabled = true
+    try {
+      if (mode === 'change') {
+        const { data: { user }, error: userError } = await client.auth.getUser()
+        if (userError || !user?.email) throw new Error('로그인이 필요합니다.')
+        const current = document.querySelector('#current-password').value
+        if (current === password) { message('현재 비밀번호와 다른 비밀번호를 입력하십시오.', true); return }
+        const { error: signError } = await client.auth.signInWithPassword({ email: user.email, password: current })
+        if (signError) { message('현재 비밀번호가 일치하지 않습니다.', true); return }
+      } else if (!recovery) throw new Error('이메일 인증이 필요합니다.')
+      const { error } = await client.auth.updateUser({ password })
+      if (error) throw error
+      document.querySelector('#password-form').reset()
+      // 저장 성공 후에는 인증 세션을 종료하고 포털 로그인으로 복귀합니다.
+      // 로그아웃 실패가 이미 완료된 비밀번호 저장을 실패로 표시하지 않도록 분리합니다.
+      const { error: signOutError } = await client.auth.signOut()
+      if (signOutError) console.error('Password sign out:', signOutError)
+      showPasswordSuccess(mode)
+    } catch (err) { console.error('Password update:', err); message('비밀번호 저장에 실패했습니다. 인증 상태를 확인하십시오.', true) }
+    finally { button.disabled = false }
+  })
+}
+async function start() {
+  const mode = params.get('mode')
+  // Recovery token은 URL의 hash/query로 전달되며 Supabase가 세션으로 교환합니다.
+  // 초기화 중 PASSWORD_RECOVERY 이벤트를 수신합니다.
+  if (mode !== 'change') resetRequest()
+  client.auth.onAuthStateChange((event) => {
+    if (event === 'PASSWORD_RECOVERY' && recoveryLinkAtLoad && !completed && mode !== 'change') {
+      recovery = true
+      clearRecoveryUrl()
+      setPassword('recovery')
+    }
+  })
+  if (mode === 'change') {
+    const { data: { user } } = await client.auth.getUser()
+    if (!user) { frame('비밀번호 변경', '<p>로그인 후 이용할 수 있습니다.</p><div class="actions"><a href="./index.html">포털 로그인</a></div>'); return }
+    setPassword('change'); return
+  }
+  // 인증 링크가 이미 처리되어 PASSWORD_RECOVERY 이벤트가 앞서 발생한 경우 대비
+  if (recoveryLinkAtLoad) {
+    const { data: { session } } = await client.auth.getSession()
+    if (session && !completed) { recovery = true; clearRecoveryUrl(); setPassword('recovery') }
+  }
+}
+start().catch(err => { console.error(err); frame('비밀번호관리', '<p>초기화에 실패했습니다. 다시 접속하십시오.</p>') })
