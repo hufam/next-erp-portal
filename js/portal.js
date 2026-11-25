@@ -40,9 +40,6 @@ function updateMode() {
 window.addEventListener('resize', updateMode)
 updateMode()
 
-function emailFallbackEnabled() {
-  return true
-}
 
 function showLogin(message = '') {
   authenticated = false
@@ -60,10 +57,12 @@ function showLogin(message = '') {
     <div class="login-card">
       <div class="login-brand">NEXT ERP</div>
       <h2>ERP 로그인</h2>
-      <p>등록된 사용자 계정으로 로그인하십시오.</p>
+      <p>등록된 회사코드와 사번으로 로그인하십시오.</p>
       <form id="login-form">
-        <label for="login-id">${emailFallbackEnabled() ? '이메일' : '사번'}</label>
-        <input id="login-id" type="${emailFallbackEnabled() ? 'email' : 'text'}" autocomplete="username" ${emailFallbackEnabled() ? '' : 'maxlength="20" autocapitalize="characters"'} required>
+        <label for="login-company">회사코드</label>
+        <input id="login-company" type="text" maxlength="64" autocapitalize="characters" autocomplete="organization" required>
+        <label for="login-id">사번</label>
+        <input id="login-id" type="text" maxlength="64" autocapitalize="characters" autocomplete="username" required>
         <label for="login-password">비밀번호</label>
         <input id="login-password" type="password" autocomplete="current-password" required>
         <button type="submit" id="login-button">로그인</button>
@@ -79,14 +78,26 @@ function showLogin(message = '') {
     button.disabled = true
     feedback.textContent = ''
     try {
-      const loginId = document.querySelector('#login-id').value.trim()
+      const company_code = document.querySelector('#login-company').value.trim().toUpperCase()
+      const emp_no = document.querySelector('#login-id').value.trim().toUpperCase()
       const password = document.querySelector('#login-password').value
-      const { error } = await client.auth.signInWithPassword({ email: loginId, password })
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/employee-login`, {
+        method: 'POST', headers: {'Content-Type': 'application/json', apikey: SUPABASE_PUBLISHABLE_KEY},
+        body: JSON.stringify({company_code, emp_no, password})
+      })
+      if (!response.ok) {
+        feedback.textContent = response.status === 429 ? '잠시 후 다시 시도하십시오.' : response.status === 503 ? '로그인 서비스 준비 중입니다.' : '회사코드, 사번 또는 비밀번호를 확인하십시오.'
+        return
+      }
+      const data = await response.json()
+      if (!data.access_token || !data.refresh_token || !data.company_id) throw new Error('Invalid login response')
+      const { error } = await client.auth.setSession({access_token: data.access_token, refresh_token: data.refresh_token})
       if (error) throw error
+      sessionStorage.setItem('next_erp_login_company', String(data.company_id))
       await loadPortal()
     } catch (error) {
       feedback.textContent = '로그인 또는 메뉴 조회에 실패했습니다. 계정과 권한을 확인하십시오.'
-      console.error('Portal sign-in:', error)
+      console.error('Portal sign-in failed')
     } finally {
       button.disabled = false
     }
@@ -154,7 +165,11 @@ async function loadPortal() {
   if (userError || !user) { showLogin(); return }
   const { data: companies, error } = await client.rpc('rpc_my_company_list')
   if (error) throw error
-  if (!companies?.length) { showLogin('접근 가능한 회사가 없습니다.'); return }
+  const loginCompany = sessionStorage.getItem('next_erp_login_company')
+  if (!loginCompany) { showLogin(); return }
+  const allowedCompany = companies?.find(c => String(c.company_id) === loginCompany)
+  if (!allowedCompany) { sessionStorage.removeItem('next_erp_login_company'); showLogin('접근 가능한 회사가 없습니다.'); return }
+  const scopedCompanies = [allowedCompany]
   authenticated = true
   authPanel.hidden = true
   document.querySelector('#portal-content').hidden = false
@@ -162,15 +177,15 @@ async function loadPortal() {
   passwordChangeButton.hidden = false
   const picker = document.querySelector('#company-select')
   picker.replaceChildren()
-  for (const company of companies) {
+  for (const company of scopedCompanies) {
     const option = document.createElement('option')
     option.value = String(company.company_id)
     option.textContent = company.company_name
     picker.append(option)
   }
-  picker.hidden = companies.length === 1
+  picker.hidden = true
   async function selectCompany() {
-    const company = companies.find(c => String(c.company_id) === picker.value)
+    const company = scopedCompanies.find(c => String(c.company_id) === picker.value)
     selectedCompany = company
     root.replaceChildren()
     userLabel.textContent = '사원정보 확인 중'
@@ -235,7 +250,7 @@ async function initialize() {
   })
   // 다른 탭에서 로그아웃한 경우 포털을 잠급니다.
   client.auth.onAuthStateChange((event) => {
-    if (event === 'SIGNED_OUT') showLogin('로그인 세션이 종료되었습니다.')
+    if (event === 'SIGNED_OUT') { sessionStorage.removeItem('next_erp_login_company'); showLogin('로그인 세션이 종료되었습니다.') }
   })
   try { await loadPortal() }
   catch (error) {
