@@ -19,6 +19,7 @@ import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './supabase-config.js'
 import { modules, moduleUrl } from './menu-config.js'
 let selectedCompany = null
 const requestedCompany = (new URLSearchParams(location.search).get('company') || '').trim().toUpperCase()
+const supportMode = new URLSearchParams(location.search).get('support') === '1'
 const validCompany = /^[A-Z0-9]{1,64}$/.test(requestedCompany)
 const scopedCode = validCompany ? requestedCompany : ''
 let publicCompanyName = ''
@@ -63,6 +64,7 @@ function showLogin(message = '') {
   document.title = publicCompanyName || 'NEXT ERP'
   document.querySelector('#portal-company-name').textContent = publicCompanyName || 'NEXT ERP'
   authPanel.hidden = false
+  if (supportMode) { authPanel.textContent = message || '시스템관리에서 ERP 접속을 다시 실행하십시오.'; return }
   authPanel.innerHTML = `
     <div class="login-card">
       <div class="login-brand">NEXT ERP</div>
@@ -160,7 +162,7 @@ function renderMenus(rows) {
         try { url = new URL(row.web_url) } catch { setStatus('등록된 WEB 주소가 올바르지 않습니다.', true); return }
         if (url.protocol !== 'https:') { setStatus('HTTPS 주소만 실행할 수 있습니다.', true); return }
         if (matchMedia('(max-width: 700px)').matches) { location.assign(url.href); return }
-        const tabName = 'next_erp_' + selectedCompany.company_id + '_' + String(row.menu_code).replace(/[^a-zA-Z0-9_]/g, '_')
+        const tabName = (supportMode ? 'next_erp_support_' : 'next_erp_') + selectedCompany.company_id + '_' + String(row.menu_code).replace(/[^a-zA-Z0-9_]/g, '_')
         const tab = window.open(url.href, tabName)
         if (tab) { openedTabs.set(tabName, tab); tab.focus() }
         else setStatus('팝업이 차단되었습니다. 브라우저의 새 탭 허용 설정을 확인하십시오.', true)
@@ -178,16 +180,17 @@ async function loadPortal() {
   if (userError || !user) { showLogin(); return }
   const { data: companies, error } = await client.rpc('rpc_my_company_list')
   if (error) throw error
-  const loginCompany = sessionStorage.getItem('next_erp_login_company')
-  if (!loginCompany || (scopedCode && sessionStorage.getItem(companyLoginKey) !== scopedCode)) { showLogin(); return }
+  const loginCompany = supportMode ? String(companies?.find(c => c.company_code === scopedCode && c.user_role === 'SYSTEM_ADMIN')?.company_id || '') : sessionStorage.getItem('next_erp_login_company')
+  if (!loginCompany || (!supportMode && scopedCode && sessionStorage.getItem(companyLoginKey) !== scopedCode)) { showLogin(); return }
   const allowedCompany = companies?.find(c => String(c.company_id) === loginCompany)
   if (!allowedCompany) { sessionStorage.removeItem('next_erp_login_company'); sessionStorage.removeItem(companyLoginKey); showLogin('접근 가능한 회사가 없습니다.'); return }
+  if (supportMode) { const {error: auditError} = await client.rpc('rpc_support_enter',{p_company_id:allowedCompany.company_id}); if (auditError) throw auditError }
   const scopedCompanies = [allowedCompany]
   authenticated = true
   authPanel.hidden = true
   document.querySelector('#portal-content').hidden = false
   logoutButton.hidden = false
-  passwordChangeButton.hidden = false
+  passwordChangeButton.hidden = supportMode
   const picker = document.querySelector('#company-select')
   picker.replaceChildren()
   for (const company of scopedCompanies) {
@@ -205,6 +208,8 @@ async function loadPortal() {
     document.title = company.company_name
     document.querySelector('#portal-company-name').textContent = company.company_name
     // 인증 사용자와 선택 회사에 연결된 사원만 표시합니다.
+    if (supportMode) userLabel.textContent = '시스템관리자'
+    else {
     const profileTask = client.from('md_employee')
       .select('emp_no,emp_name').eq('company_id', company.company_id)
       .eq('auth_user_id', user.id).eq('active_yn', 'Y').maybeSingle()
@@ -217,11 +222,12 @@ async function loadPortal() {
       if (selectedCompany === company && authenticated) userLabel.textContent = '사원정보 조회 실패'
       console.error('Portal employee lookup:', error)
     })
+    }
     const { data, error } = await client.rpc('rpc_next_company_module_list', {p_company_id: company.company_id})
     if (selectedCompany !== company || !authenticated) return
     if (error) { setStatus('회사별 메뉴 조회 실패', true); return }
     const allowed = new Set((data || []).map(r => r.module_code))
-    renderMenus(modules.filter(m => allowed.has(m[0])).map(([id, name, group], i) => ({menu_id:i, menu_code:id, menu_name:name, web_group:group, web_url:moduleUrl(id, company.company_id), web_enabled_yn:'Y', web_sort_order:i})))
+    renderMenus(modules.filter(m => allowed.has(m[0])).map(([id, name, group], i) => ({menu_id:i, menu_code:id, menu_name:name, web_group:group, web_url:moduleUrl(id, company.company_id) + (supportMode ? '&support=1' : ''), web_enabled_yn:'Y', web_sort_order:i})))
   }
   picker.onchange = () => { void selectCompany() }
   await selectCompany()
@@ -239,13 +245,13 @@ passwordChangeButton.addEventListener('click', () => {
 logoutButton.addEventListener('click', async () => {
   logoutButton.disabled = true
   try {
-    const { error } = await client.auth.signOut()
+    const { error } = supportMode ? {error:null} : await client.auth.signOut()
     if (error) throw error
     for (const tab of openedTabs.values()) {
       try { if (!tab.closed) tab.close() } catch { /* 브라우저가 차단할 수 있음 */ }
     }
     openedTabs.clear()
-    showLogin('로그아웃되었습니다.')
+    showLogin(supportMode ? '유지보수 접속을 종료했습니다.' : '로그아웃되었습니다.')
   } catch (error) {
     setStatus('로그아웃에 실패했습니다. 다시 시도하십시오.', true)
     console.error('Portal sign-out:', error)
@@ -260,7 +266,7 @@ async function initialize() {
     return
   }
   client = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, ...(supportMode ? {storageKey:'next-erp-system-admin'} : {}) }
   })
   // 다른 탭에서 로그아웃한 경우 포털을 잠급니다.
   client.auth.onAuthStateChange((event) => {
