@@ -16,7 +16,7 @@ if (typeof BroadcastChannel !== 'undefined') {
 }
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './supabase-config.js'
-import { modules, moduleUrl } from './menu-config.js'
+import { modules, moduleUrl } from './menu-config.js?v=20261125-2'
 let selectedCompany = null
 const requestedCompany = (new URLSearchParams(location.search).get('company') || '').trim().toUpperCase()
 const supportMode = new URLSearchParams(location.search).get('support') === '1'
@@ -123,12 +123,12 @@ function renderMenus(rows) {
   root.replaceChildren()
   const grouped = new Map()
   for (const row of rows) {
-    if (!row.web_group || !row.web_url) continue
+    if (!row.web_group) continue
     if (!grouped.has(row.web_group)) grouped.set(row.web_group, [])
     grouped.get(row.web_group).push(row)
   }
   // 그룹 순서는 현행 포털 순서로 유지; 새로운 그룹은 뒤에 표시합니다.
-  const order = ['영업관리', '재고관리', '구매관리', '대금·마감', '기준정보', '운영·경영', '시스템관리']
+  const order = ['영업관리', '재고관리', '구매관리', '생산관리', '품질관리', '설비관리', '대금·마감', '기준정보', '운영·경영', '시스템관리']
   const names = [...grouped.keys()].sort((a,b) => {
     const ai = order.indexOf(a), bi = order.indexOf(b)
     return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi) || a.localeCompare(b, 'ko')
@@ -146,17 +146,22 @@ function renderMenus(rows) {
       el.type = 'button'
       const enabled = row.web_enabled_yn === 'Y'
       el.className = enabled ? 'item active' : 'item disabled'
-      el.disabled = !enabled
-      el.setAttribute('aria-label', enabled ? `${row.menu_name} 실행` : `${row.menu_name} 준비 중`)
+      el.disabled = false
+      el.setAttribute('aria-label', enabled ? `${row.menu_name} 실행` : `${row.menu_name} 개발예정`)
       const label = document.createElement('span')
       label.className = 'item-label'
       label.textContent = row.menu_name
       const state = document.createElement('span')
       state.className = 'status'
-      state.textContent = enabled ? '열기 ↗' : '준비 중'
+      state.textContent = enabled ? '열기 ↗' : '개발예정'
       el.append(label, state)
-      if (enabled) el.addEventListener('click', () => {
+      el.addEventListener('click', () => {
         if (!authenticated) { showLogin('로그인 세션이 종료되었습니다.'); return }
+        if (!enabled) {
+          document.querySelector('#planned-title').textContent = row.menu_name
+          document.querySelector('#planned-dialog').showModal()
+          return
+        }
         // DB URL은 개발자가 등록한 신뢰된 HTTPS 주소만 실행합니다.
         let url
         try { url = new URL(row.web_url) } catch { setStatus('등록된 WEB 주소가 올바르지 않습니다.', true); return }
@@ -227,7 +232,7 @@ async function loadPortal() {
     if (selectedCompany !== company || !authenticated) return
     if (error) { setStatus('회사별 메뉴 조회 실패', true); return }
     const allowed = new Set((data || []).map(r => r.module_code))
-    renderMenus(modules.filter(m => allowed.has(m[0])).map(([id, name, group], i) => ({menu_id:i, menu_code:id, menu_name:name, web_group:group, web_url:moduleUrl(id, company.company_id) + (supportMode ? '&support=1' : ''), web_enabled_yn:'Y', web_sort_order:i})))
+    renderMenus(modules.filter(m => allowed.has(m[0])).map(([id, name, group, ready = true], i) => ({menu_id:i, menu_code:id, menu_name:name, web_group:group, web_url:ready ? moduleUrl(id, company.company_id) + (supportMode ? '&support=1' : '') : null, web_enabled_yn:ready ? 'Y' : 'N', web_sort_order:i})))
   }
   picker.onchange = () => { void selectCompany() }
   await selectCompany()
