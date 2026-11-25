@@ -6,6 +6,9 @@ const client = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
 })
 const panel = document.querySelector('#password-panel')
 const params = new URLSearchParams(location.search)
+const companyCode = (params.get('company') || '').trim().toUpperCase()
+const portalUrl = new URL('./index.html', location.href)
+if (/^[A-Z0-9]{1,64}$/.test(companyCode)) portalUrl.searchParams.set('company',companyCode)
 // 재설정 메일에서 직접 열린 탭만 복구 이벤트를 처리합니다.
 // 다른 탭의 비밀번호관리 화면이 복구 입력 화면으로 바뀌는 현상을 방지합니다.
 const recoveryLinkAtLoad = params.has('code') || params.get('type') === 'recovery' ||
@@ -25,6 +28,7 @@ function message(text, error = false) {
 }
 function frame(title, body) {
   panel.innerHTML = `<div class="login-brand">NEXT ERP</div><h2>${title}</h2>${body}<div class="message" id="password-message" role="status"></div>`
+  panel.querySelectorAll('a[href="./index.html"]').forEach(a => a.href = portalUrl.href)
 }
 function resetRequest() {
   frame('비밀번호 등록 · 재등록', `<p>등록된 이메일로 비밀번호 재설정 링크를 보내드립니다. 메일의 링크로 본인확인 후 새 비밀번호를 설정하십시오.</p><form id="reset-request"><label for="reset-email">등록된 이메일</label><input id="reset-email" type="email" autocomplete="email" required><div class="actions"><a href="./index.html">취소</a><button class="primary" id="reset-send" type="submit">인증 메일 발송</button></div></form>`)
@@ -41,7 +45,7 @@ function resetRequest() {
       message('인증 메일 요청이 접수되었습니다. 로그인 화면으로 돌아갑니다.')
       window.close()
       setTimeout(() => {
-        if (!window.closed) window.location.replace(new URL('./index.html', location.href).href)
+        if (!window.closed) window.location.replace(portalUrl.href)
       }, 350)
     } catch (err) {
       console.error('Password reset request:', err)
@@ -57,9 +61,9 @@ function showPasswordSuccess(mode) {
   const portalLink = document.querySelector('#password-portal-link')
   if (portalLink) portalLink.hidden = true
   if (mode === 'recovery') {
-    frame('비밀번호 재설정 완료', '<p>새 비밀번호가 정상적으로 등록되었습니다.</p><p class="password-close-notice">현재 비밀번호관리 창을 닫아 주세요.</p><p>기존 WEB ERP 포털에서 회사코드, 사번과 새 비밀번호로 로그인하십시오.</p>')
+    frame('비밀번호 재설정 완료', '<p>새 비밀번호가 정상적으로 등록되었습니다.</p><p class="password-close-notice">현재 비밀번호관리 창을 닫아 주세요.</p><p>기존 WEB ERP 포털에서 필요한 로그인 정보와 새 비밀번호로 로그인하십시오.</p>')
   } else {
-    frame('비밀번호 변경 완료', '<p>비밀번호가 정상적으로 변경되었습니다.</p><p class="password-close-notice">현재 비밀번호관리 창을 닫아 주세요.</p><p>기존 WEB ERP 포털에서 회사코드, 사번과 새 비밀번호로 다시 로그인하십시오.</p>')
+    frame('비밀번호 변경 완료', '<p>비밀번호가 정상적으로 변경되었습니다.</p><p class="password-close-notice">현재 비밀번호관리 창을 닫아 주세요.</p><p>기존 WEB ERP 포털에서 필요한 로그인 정보와 새 비밀번호로 다시 로그인하십시오.</p>')
   }
 }
 function setPassword(mode) {

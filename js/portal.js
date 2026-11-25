@@ -18,6 +18,16 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './supabase-config.js'
 import { modules, moduleUrl } from './menu-config.js'
 let selectedCompany = null
+const requestedCompany = (new URLSearchParams(location.search).get('company') || '').trim().toUpperCase()
+const validCompany = /^[A-Z0-9]{1,64}$/.test(requestedCompany)
+const scopedCode = validCompany ? requestedCompany : ''
+let publicCompanyName = ''
+const companyLoginKey = 'next_erp_login_company_code'
+async function lookupCompanyName() {
+  if (!scopedCode) return
+  const {data,error} = await client.rpc('rpc_portal_company_name',{p_company_code:scopedCode})
+  if (!error && typeof data === 'string') publicCompanyName = data
+}
 
 const root = document.querySelector('#groups')
 const authPanel = document.querySelector('#auth-panel')
@@ -50,17 +60,17 @@ function showLogin(message = '') {
   passwordChangeButton.hidden = true
   userLabel.textContent = ''
   document.querySelector('#company-select').hidden = true
-  document.title = 'NEXT ERP'
-  document.querySelector('#portal-company-name').textContent = 'NEXT ERP'
+  document.title = publicCompanyName || 'NEXT ERP'
+  document.querySelector('#portal-company-name').textContent = publicCompanyName || 'NEXT ERP'
   authPanel.hidden = false
   authPanel.innerHTML = `
     <div class="login-card">
       <div class="login-brand">NEXT ERP</div>
       <h2>ERP 로그인</h2>
-      <p>등록된 회사코드와 사번으로 로그인하십시오.</p>
+      <p>${scopedCode ? "등록된 사번으로 로그인하십시오." : "등록된 회사코드와 사번으로 로그인하십시오."}</p>
       <form id="login-form">
-        <label for="login-company">회사코드</label>
-        <input id="login-company" type="text" maxlength="64" autocapitalize="characters" autocomplete="organization" required>
+        ${scopedCode ? '<h3 id="login-company-name"></h3>' : `<label for="login-company">회사코드</label>
+        <input id="login-company" type="text" maxlength="64" autocapitalize="characters" autocomplete="organization" required>`}
         <label for="login-id">사번</label>
         <input id="login-id" type="text" maxlength="64" autocapitalize="characters" autocomplete="username" required>
         <label for="login-password">비밀번호</label>
@@ -70,7 +80,9 @@ function showLogin(message = '') {
         <div id="login-message" role="alert"></div>
       </form>
     </div>`
+  if (scopedCode) document.querySelector('#login-company-name').textContent = publicCompanyName || scopedCode
   document.querySelector('#login-message').textContent = message
+  if (scopedCode) document.querySelector('.password-entry a').href = './password.html?mode=reset&company=' + encodeURIComponent(scopedCode)
   document.querySelector('#login-form').addEventListener('submit', async (event) => {
     event.preventDefault()
     const button = document.querySelector('#login-button')
@@ -78,7 +90,7 @@ function showLogin(message = '') {
     button.disabled = true
     feedback.textContent = ''
     try {
-      const company_code = document.querySelector('#login-company').value.trim().toUpperCase()
+      const company_code = scopedCode || document.querySelector('#login-company').value.trim().toUpperCase()
       const emp_no = document.querySelector('#login-id').value.trim().toUpperCase()
       const password = document.querySelector('#login-password').value
       const response = await fetch(`${SUPABASE_URL}/functions/v1/employee-login`, {
@@ -94,6 +106,7 @@ function showLogin(message = '') {
       const { error } = await client.auth.setSession({access_token: data.access_token, refresh_token: data.refresh_token})
       if (error) throw error
       sessionStorage.setItem('next_erp_login_company', String(data.company_id))
+      sessionStorage.setItem(companyLoginKey, company_code)
       await loadPortal()
     } catch (error) {
       feedback.textContent = '로그인 또는 메뉴 조회에 실패했습니다. 계정과 권한을 확인하십시오.'
@@ -166,9 +179,9 @@ async function loadPortal() {
   const { data: companies, error } = await client.rpc('rpc_my_company_list')
   if (error) throw error
   const loginCompany = sessionStorage.getItem('next_erp_login_company')
-  if (!loginCompany) { showLogin(); return }
+  if (!loginCompany || (scopedCode && sessionStorage.getItem(companyLoginKey) !== scopedCode)) { showLogin(); return }
   const allowedCompany = companies?.find(c => String(c.company_id) === loginCompany)
-  if (!allowedCompany) { sessionStorage.removeItem('next_erp_login_company'); showLogin('접근 가능한 회사가 없습니다.'); return }
+  if (!allowedCompany) { sessionStorage.removeItem('next_erp_login_company'); sessionStorage.removeItem(companyLoginKey); showLogin('접근 가능한 회사가 없습니다.'); return }
   const scopedCompanies = [allowedCompany]
   authenticated = true
   authPanel.hidden = true
@@ -217,6 +230,7 @@ async function loadPortal() {
 passwordChangeButton.addEventListener('click', () => {
   if (!authenticated) { showLogin('로그인이 필요합니다.'); return }
   const url = new URL('./password.html?mode=change', location.href)
+  if (scopedCode) url.searchParams.set('company', scopedCode)
   const tab = window.open(url.href, 'next_erp_password_change')
   if (tab) { openedTabs.set('next_erp_password_change', tab); tab.focus() }
   else setStatus('팝업이 차단되었습니다. 브라우저의 새 탭 허용 설정을 확인하십시오.', true)
@@ -250,9 +264,9 @@ async function initialize() {
   })
   // 다른 탭에서 로그아웃한 경우 포털을 잠급니다.
   client.auth.onAuthStateChange((event) => {
-    if (event === 'SIGNED_OUT') { sessionStorage.removeItem('next_erp_login_company'); showLogin('로그인 세션이 종료되었습니다.') }
+    if (event === 'SIGNED_OUT') { sessionStorage.removeItem('next_erp_login_company'); sessionStorage.removeItem(companyLoginKey); showLogin('로그인 세션이 종료되었습니다.') }
   })
-  try { await loadPortal() }
+  try { await lookupCompanyName(); await loadPortal() }
   catch (error) {
     console.error('Portal initialization:', error)
     showLogin('메뉴 조회에 실패했습니다. 관리자에게 문의하십시오.')
